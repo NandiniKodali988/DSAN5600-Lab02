@@ -1,0 +1,128 @@
+---
+title: Lab 2
+author: Nandini Kodali
+format: 
+  html: 
+    embed-resources: true
+---
+
+## Problem 1
+
+Group: Yiqin Zhou, Jiahui Liu, Nandini Kodali
+
+COVID data
+
+### Plot 1
+```{r, warning = FALSE, message = FALSE}
+# load all the required libraries
+library(dplyr)
+library(ggplot2)
+library(gganimate)
+library(scales)
+library(tidyr)
+library(plotly)
+```
+
+```{r}
+# read the data
+df <- read.csv("Data/covide_cleaned.csv")
+
+# data cleaning 
+df <- df |>
+  mutate(
+    covid.date = as.Date(covid.date),
+    # create month buckets for further calculations
+    month = as.Date(cut(covid.date, "month"))  
+  )
+
+# specific countries for analysis
+countries <- c("United States", "India", "France", "South Africa", "Australia")
+
+
+# month-end cumullative totals per country
+# consider the last daily row in each month for month-end totals
+monthly_end <- df |>
+  filter(covid.location %in% countries,
+         !is.na(covid.total_cases), !is.na(covid.total_deaths)) |>
+  group_by(covid.location, month) |>
+  # last date in that month
+  slice_max(covid.date, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  transmute(
+    covid.location, month,
+    total_cases  = covid.total_cases,
+    total_deaths = covid.total_deaths
+  )
+
+# monthly sums for calculating the percentage of deaths in each month
+monthly_sums <- df |>
+  filter(covid.location %in% countries) |>
+  group_by(covid.location, month) |>
+  summarise(
+    monthly_cases  = sum(covid.new_cases,  na.rm = TRUE),
+    monthly_deaths = sum(covid.new_deaths, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# computing monthly deaths percentage = bubble size 
+plot_df <- monthly_end |>
+  left_join(monthly_sums, by = c("covid.location", "month")) |>
+  mutate(
+    # mothly death % = (monthly deaths / monthly cases) * 100 
+    death_pct = if_else(monthly_cases > 0, 100 * monthly_deaths / monthly_cases, 0)
+  ) |>
+  arrange(month, covid.location)
+
+
+# ensure that all countries appear in all the months 
+plot_df2 <- plot_df |>
+# add missing rows and fill 0s
+  complete(covid.location, month,
+           fill = list(total_cases = 0, total_deaths = 0,
+                       monthly_cases = 0, monthly_deaths = 0, death_pct = 0)) |>
+  mutate(month_str = format(month, "%Y-%m")) |>
+  arrange(month, covid.location)
+```
+
+```{r}
+# maximum bubble size
+max_px   <- 36                                  
+max_val  <- max(plot_df2$death_pct, na.rm = TRUE)
+sizeref  <- if (max_val > 0) 2 * max_val / (max_px^2) else 1
+
+
+plt <- plot_ly(
+  data   = plot_df2,
+  x      = ~total_cases,
+  y      = ~total_deaths,
+  frame  = ~month_str,
+  ids    = ~covid.location,
+  color  = ~covid.location,
+  size   = ~death_pct,                 
+  type   = "scatter",
+  mode   = "markers",
+  marker = list(sizemode = "area", sizeref = sizeref, sizemin = 6, opacity = 0.8),
+  # custom HTML template for too, tip text
+  text   = ~paste0(
+    "<b>", covid.location, "</b>",
+    "<br>Month: ", month_str,
+    "<br>Total cases: ", comma(total_cases),
+    "<br>Total deaths: ", comma(total_deaths),
+    "<br>Monthly death %: ", round(death_pct, 2), "%"
+  ),
+  hoverinfo = "text"
+) |>
+  layout(
+    title = "COVID-19: Total Deaths vs Total Cases (Month-end)",
+    xaxis = list(title = "Total cases (cumulative)"),
+    yaxis = list(title = "Total deaths (cumulative)"),
+    legend = list(title = list(text = "Country"), itemsizing = "constant") 
+  ) |>
+  animation_slider(currentvalue = list(prefix = "Month: ")) |>
+  animation_opts(frame = 800, transition = 0, easing = "linear", redraw = FALSE) |>
+  animation_button(x = 1, xanchor = "right", y = 0, yanchor = "bottom")
+
+plt
+
+
+```
